@@ -1,0 +1,1 @@
+../vendors/hanzi_lookup/web_demo/hanzi_lookup.js
