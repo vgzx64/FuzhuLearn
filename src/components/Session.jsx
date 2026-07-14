@@ -1,10 +1,12 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import hanziData from '../data/hanzi-index.json';
 import StrokePlayer from './StrokePlayer';
 import DrawCanvas from './DrawCanvas';
+import UsageInfo from './UsageInfo';
 import { markHanziLearned, markHanziWrong, getHanziStatus } from '../utils/progress';
 import { load as loadHanziLookup, lookup as hanziLookup } from '../utils/hanziLookup';
 import { getReferenceStrokes, checkStrokeOrder } from '../utils/strokeOrder';
+import { getUsageExamples } from '../utils/dictionary';
 
 // ponytail: single-file session controller. No routing library, no complex state machine.
 // Ceiling: no spaced repetition algorithm. Upgrade: add SM-2 when needed.
@@ -207,6 +209,7 @@ export default function Session() {
               <div className="session-info">
                 <p className="session-pinyin">{currentChar.p}</p>
                 <p className="session-meaning">{currentChar.m}</p>
+                <UsageInfo char={currentChar.c} />
               </div>
               {animationEnded && (
                 <button onClick={handleShowDone} className="btn-primary">

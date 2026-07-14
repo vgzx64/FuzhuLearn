@@ -330,6 +330,43 @@ body {
 .stroke-ok .stroke-icon { color: var(--correct); }
 .stroke-bad .stroke-icon { color: var(--wrong); }
 
+/* Usage info */
+.usage-info {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 0.85rem;
+}
+.usage-label {
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.usage-list {
+  list-style: none;
+  padding-left: 0;
+  margin: 0 0 8px 0;
+}
+.usage-item {
+  padding: 2px 0;
+  color: var(--text-secondary);
+}
+.usage-loading, .usage-empty {
+  color: var(--text-secondary);
+  font-style: italic;
+  padding: 4px 0;
+}
+.usage-dict-link {
+  display: inline-block;
+  color: var(--primary);
+  text-decoration: none;
+  font-size: 0.8rem;
+  margin-top: 4px;
+}
+.usage-dict-link:hover {
+  text-decoration: underline;
+}
+
 .session-status {
   margin-top: 12px;
   text-align: center;
