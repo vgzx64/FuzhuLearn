@@ -1,43 +1,27 @@
-import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import hanziData from '../data/hanzi-index.json';
 import StrokePlayer from './StrokePlayer';
 import DrawCanvas from './DrawCanvas';
 import UsageInfo from './UsageInfo';
-import { markHanziLearned, markHanziWrong, getHanziStatus } from '../utils/progress';
+import { markHanziReviewed, markHanziForgotten, getHanziStatus, getSessionCards } from '../utils/progress';
 import { load as loadHanziLookup, lookup as hanziLookup } from '../utils/hanziLookup';
 import { getReferenceStrokes, checkStrokeOrder } from '../utils/strokeOrder';
-import { getUsageExamples } from '../utils/dictionary';
 
 // ponytail: single-file session controller. No routing library, no complex state machine.
 // Ceiling: no spaced repetition algorithm. Upgrade: add SM-2 when needed.
 
 const LEVELS = [1, 2, 3, 4, 5, 6, 7];
 
-function pickNext(level, exclude) {
-  const pool = hanziData.filter(h => h.l === level && !exclude.has(h.c));
-  if (pool.length === 0) return null;
-  const unlearned = pool.filter(h => getHanziStatus(h.c).status === 'new');
-  const target = unlearned.length > 0 ? unlearned : pool;
-  return target[Math.floor(Math.random() * target.length)];
-}
-
-function pickReview(level) {
-  const pool = hanziData.filter(h => h.l === level);
-  const learned = pool.filter(h => getHanziStatus(h.c).status === 'learned');
-  if (learned.length === 0) return null;
-  return learned[Math.floor(Math.random() * learned.length)];
-}
-
 export default function Session() {
   const [mode, setMode] = useState('learn');
   const [phase, setPhase] = useState('show'); // 'show' | 'draw' | 'result'
   const [currentLevel, setCurrentLevel] = useState(1);
   const [currentChar, setCurrentChar] = useState(null);
-  const [animationEnded, setAnimationEnded] = useState(false);
   const [message, setMessage] = useState('');
-  const [lookupResult, setLookupResult] = useState(null); // { matches, correctIndex, score, strokeCheck }
+  const [lookupResult, setLookupResult] = useState(null);
   const [hlReady, setHlReady] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [sessionQueue, setSessionQueue] = useState([]);
   const canvasRef = useRef(null);
 
   // Load HanziLookup WASM on mount
@@ -45,46 +29,63 @@ export default function Session() {
     loadHanziLookup().then(() => setHlReady(true));
   }, []);
 
+  const popFromQueue = useCallback((queue) => {
+    if (!queue || queue.length === 0) return { char: null, remaining: [] };
+    return { char: queue[0], remaining: queue.slice(1) };
+  }, []);
+
   const startLearn = useCallback(() => {
-    const seen = new Set();
-    const char = pickNext(currentLevel, seen);
-    if (!char) {
-      setMessage('All characters in this level are learned! Try review mode.');
+    const { queue } = getSessionCards(currentLevel, hanziData);
+    if (queue.length === 0) {
+      setMessage('All caught up! No new cards and no reviews due today.');
       return;
     }
+    const { char, remaining } = popFromQueue(queue);
+    if (!char) {
+      setMessage('No cards available.');
+      return;
+    }
+    setSessionQueue(remaining);
     setCurrentChar(char);
-    setPhase('show');
-    setAnimationEnded(false);
     setMessage('');
     setLookupResult(null);
-  }, [currentLevel]);
+    // If it's a new card (never seen), show animation first
+    const status = getHanziStatus(char.c);
+    if (status.status === 'new') {
+      setPhase('show');
+    } else {
+      // Already learned/due card → go straight to draw phase, no hint
+      setPhase('draw');
+      setTimeout(() => canvasRef.current?.clear(), 50);
+    }
+  }, [currentLevel, popFromQueue]);
 
   const startReview = useCallback(() => {
-    const char = pickReview(currentLevel);
-    if (!char) {
-      setMessage('No characters to review yet. Learn some first!');
+    const { queue } = getSessionCards(currentLevel, hanziData);
+    // In review mode, only show due cards (skip new ones)
+    const dueChars = queue.filter(c => {
+      const s = getHanziStatus(c.c);
+      return s.status !== 'new';
+    });
+    if (dueChars.length === 0) {
+      setMessage('No cards to review today. Learn some new ones first!');
       return;
     }
+    const { char, remaining } = popFromQueue(dueChars);
+    setSessionQueue(dueChars.slice(1));
     setCurrentChar(char);
     setPhase('draw');
-    setAnimationEnded(false);
     setMessage('');
     setLookupResult(null);
     setTimeout(() => canvasRef.current?.clear(), 50);
-  }, [currentLevel]);
-
-  const handleAnimEnd = useCallback(() => {
-    setAnimationEnded(true);
-  }, []);
+  }, [currentLevel, popFromQueue]);
 
   const handleShowDone = useCallback(() => {
     setPhase('draw');
-    setAnimationEnded(false);
     setLookupResult(null);
     canvasRef.current?.clear();
   }, []);
 
-  // Check the drawn character with HanziLookup + stroke order
   const handleCheck = useCallback(async () => {
     if (!currentChar || !canvasRef.current) return;
     const strokes = canvasRef.current.getStrokes();
@@ -95,7 +96,6 @@ export default function Session() {
     setChecking(true);
     setMessage('');
     try {
-      // Run HanziLookup and stroke order check in parallel
       const [matches, refStrokes] = await Promise.all([
         hanziLookup(strokes, 8),
         getReferenceStrokes(currentChar.c)
@@ -104,17 +104,11 @@ export default function Session() {
       const correctChar = currentChar.c;
       const correctIndex = matches.findIndex(m => m.hanzi === correctChar);
 
-      // Stroke order check
       let strokeCheck = null;
       if (refStrokes && refStrokes.length > 0) {
         strokeCheck = checkStrokeOrder(strokes, refStrokes);
       }
 
-      // Combined scoring:
-      // - Correct char #1 + all strokes correct → 1.0
-      // - Correct char #1 + some strokes wrong → 0.7
-      // - Correct char found but not #1 → 0.5
-      // - Not found → 0
       let score = 0;
       if (correctIndex === 0) {
         score = (strokeCheck && strokeCheck.match) ? 1.0 : 0.7;
@@ -125,11 +119,8 @@ export default function Session() {
       setLookupResult({ matches, correctIndex, score, strokeCheck });
       setPhase('result');
 
-      if (score > 0) {
-        markHanziLearned(correctChar, score);
-      } else {
-        markHanziWrong(correctChar);
-      }
+      // Use SM-2 review instead of old markHanziLearned/markHanziWrong
+      markHanziReviewed(correctChar, score);
     } catch (err) {
       setMessage('Lookup failed: ' + err.message);
     } finally {
@@ -137,16 +128,53 @@ export default function Session() {
     }
   }, [currentChar]);
 
-  // Continue to next character after result
   const handleNext = useCallback(() => {
+    // Try next from remaining queue first
+    const { char, remaining } = popFromQueue(sessionQueue);
+    if (char) {
+      setSessionQueue(remaining);
+      setCurrentChar(char);
+      setMessage('');
+      setLookupResult(null);
+      const status = getHanziStatus(char.c);
+      if (status.status === 'new') {
+        setPhase('show');
+      } else {
+        setPhase('draw');
+        setTimeout(() => canvasRef.current?.clear(), 50);
+      }
+      return;
+    }
+    // Queue exhausted, refill
     if (mode === 'learn') startLearn();
     else startReview();
-  }, [mode, startLearn, startReview]);
+  }, [mode, sessionQueue, startLearn, startReview, popFromQueue]);
 
-  // Show answer in review mode (skip drawing)
+  const handleForgot = useCallback(() => {
+    if (!currentChar) return;
+    markHanziForgotten(currentChar.c);
+    // Next character
+    const { char, remaining } = popFromQueue(sessionQueue);
+    if (char) {
+      setSessionQueue(remaining);
+      setCurrentChar(char);
+      setMessage('');
+      setLookupResult(null);
+      const status = getHanziStatus(char.c);
+      if (status.status === 'new') {
+        setPhase('show');
+      } else {
+        setPhase('draw');
+        setTimeout(() => canvasRef.current?.clear(), 50);
+      }
+    } else {
+      if (mode === 'learn') startLearn();
+      else startReview();
+    }
+  }, [currentChar, sessionQueue, mode, startLearn, startReview, popFromQueue]);
+
   const handleShowAnswer = useCallback(() => {
     setPhase('show');
-    setAnimationEnded(false);
   }, []);
 
   const handleLevelChange = useCallback((e) => {
@@ -154,6 +182,7 @@ export default function Session() {
     setCurrentChar(null);
     setMessage('');
     setLookupResult(null);
+    setSessionQueue([]);
   }, []);
 
   const toggleMode = useCallback(() => {
@@ -162,6 +191,7 @@ export default function Session() {
     setCurrentChar(null);
     setMessage('');
     setLookupResult(null);
+    setSessionQueue([]);
   }, [mode]);
 
   useEffect(() => {
@@ -172,6 +202,7 @@ export default function Session() {
   }, [mode, currentLevel, currentChar, startLearn, startReview]);
 
   const status = currentChar ? getHanziStatus(currentChar.c) : null;
+  const isNewCard = currentChar && status && status.status === 'new';
 
   return (
     <div className="session">
@@ -197,40 +228,48 @@ export default function Session() {
             <span className="session-level">HSK {currentChar.l}</span>
           </div>
 
-          {/* Show phase: stroke animation + info */}
+          {/* Show phase: stroke animation (only for new cards) */}
           {phase === 'show' && (
             <div className="session-show">
               <div className="session-char-large">{currentChar.c}</div>
               <StrokePlayer 
                 char={currentChar.c} 
                 playing={true} 
-                onEnd={handleAnimEnd} 
               />
               <div className="session-info">
                 <p className="session-pinyin">{currentChar.p}</p>
                 <p className="session-meaning">{currentChar.m}</p>
                 <UsageInfo char={currentChar.c} />
               </div>
-              {animationEnded && (
-                <button onClick={handleShowDone} className="btn-primary">
-                  {mode === 'learn' ? 'Now you try!' : 'Continue'}
-                </button>
-              )}
+              <button onClick={handleShowDone} className="btn-primary">
+                Now you try!
+              </button>
             </div>
           )}
 
-          {/* Draw phase: user writes */}
+          {/* Draw phase */}
           {phase === 'draw' && (
             <div className="session-draw">
-              {mode === 'review' ? (
-                <div className="session-prompt">
-                  <p className="session-pinyin">{currentChar.p}</p>
-                  <p className="session-meaning">{currentChar.m}</p>
-                </div>
+              <div className="session-prompt">
+                {mode === 'review' ? (
+                  <>
+                    <p className="session-pinyin">{currentChar.p}</p>
+                    <p className="session-meaning">{currentChar.m}</p>
+                  </>
+                ) : isNewCard ? (
+                  <>
+                    <p className="session-pinyin">{currentChar.p}</p>
+                    <p className="session-meaning">{currentChar.m}</p>
+                  </>
+                ) : (
+                  <p className="session-hint">Write the character below</p>
+                )}
+              </div>
+              {isNewCard ? (
+                <DrawCanvas ref={canvasRef} hintChar={currentChar.c} />
               ) : (
-                <p className="session-hint">Write the character below</p>
+                <DrawCanvas ref={canvasRef} />
               )}
-              <DrawCanvas ref={canvasRef} />
               <div className="session-actions">
                 <button 
                   onClick={handleCheck} 
@@ -239,8 +278,14 @@ export default function Session() {
                 >
                   {checking ? 'Checking...' : hlReady ? '✓ Check' : 'Loading...'}
                 </button>
+                {/* Show "Forgot" button for review/due cards, not for new cards */}
+                {!isNewCard && (
+                  <button onClick={handleForgot} className="btn-secondary" title="Mark as forgotten and move to next">
+                    Forgot
+                  </button>
+                )}
                 {mode === 'review' && (
-                  <button onClick={handleShowAnswer} className="btn-secondary">
+                  <button onClick={handleShowAnswer} className="btn-small">
                     Show answer
                   </button>
                 )}
@@ -312,7 +357,7 @@ export default function Session() {
           {/* Status indicator */}
           {status && status.status !== 'new' && (
             <div className="session-status">
-              Points: {status.correct}
+              Next review: {status.nextReview || 'soon'} | EF: {status.ef || '2.5'}
             </div>
           )}
         </div>
