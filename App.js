@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, StatusBar } from 'react-native';
 import { Provider, useSelector, useDispatch } from 'react-redux';
 import { store, selectView, setView } from './store';
 import Session from './components/Session';
 import Words from './components/Words';
+import * as SplashScreen from 'expo-splash-screen';
 
 function AppContent() {
   const view = useSelector(selectView);
@@ -39,6 +40,10 @@ function AppContent() {
 }
 
 export default function App() {
+  useEffect(() => {
+    SplashScreen.hide();
+  }, []);
+
   return (
     <Provider store={store}>
       <AppContent />
