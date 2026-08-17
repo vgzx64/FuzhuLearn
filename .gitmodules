@@ -1,9 +1,9 @@
-[submodule "vendors/complete-hsk-vocabulary"]
-	path = vendors/complete-hsk-vocabulary
-	url = https://github.com/drkameleon/complete-hsk-vocabulary
 [submodule "vendors/makemeahanzi"]
 	path = vendors/makemeahanzi
 	url = https://github.com/skishore/makemeahanzi
 [submodule "vendors/hanzi_lookup"]
 	path = vendors/hanzi_lookup
 	url = https://github.com/vgzx64/hanzi_lookup.git
+[submodule "vendors/complete-hsk-vocabulary-sqlite"]
+	path = vendors/complete-hsk-vocabulary-sqlite
+	url = https://github.com/vgzx64/complete-hsk-vocabulary-sqlite

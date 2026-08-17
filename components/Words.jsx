@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Modal, TextInput, StyleSheet } from 'react-native';
-import hanziData from '../data/hanzi-index.json';
-import { getLevelStats, getHanziStatus, markHanziLearned, markHanziWrong, isLevelComplete, markLevelComplete } from '../utils/progress';
+import { getHanziStatus, markHanziLearned, markHanziWrong, markLevelComplete, isLevelComplete } from '../utils/progress';
 import StrokePlayer from './StrokePlayer';
+import { getVocabularyService } from '../services/vocabulary';
 
 const LEVELS = [1, 2, 3, 4, 5, 6, 7];
 const FILTERS = ['all', 'new', 'learning', 'learned'];
+const PAGE_SIZE = 50;
 
 export default function Words() {
   const [refresh, setRefresh] = useState(0);
@@ -13,62 +14,123 @@ export default function Words() {
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [detailChar, setDetailChar] = useState(null);
-  const [stats, setStats] = useState({});
+  const [hanziData, setHanziData] = useState([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [page, setPage] = useState(0);
+  const [levelTotals, setLevelTotals] = useState({});
   const [levelComplete, setLevelComplete] = useState({});
   const [hanziStatuses, setHanziStatuses] = useState({});
+  const [loading, setLoading] = useState(true);
 
   const rerender = () => setRefresh(r => r + 1);
 
-  // Load all async data on mount and after refresh
+  // Load level totals from the DB on mount
   useEffect(() => {
-    async function load() {
-      const s = {}, lc = {}, hs = {};
+    let cancelled = false;
+    (async () => {
+      try {
+        const svc = await getVocabularyService();
+        const totals = {};
+        for (const level of LEVELS) {
+          totals[level] = await svc.countWordsByLevel(level);
+        }
+        if (!cancelled) setLevelTotals(totals);
+      } catch (err) {
+        console.error('Failed to load level counts:', err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Load level completion statuses
+  useEffect(() => {
+    (async () => {
+      const lc = {};
       for (const level of LEVELS) {
-        s[level] = await getLevelStats(level, hanziData);
         lc[level] = await isLevelComplete(level);
       }
-      for (const h of hanziData) {
-        hs[h.c] = await getHanziStatus(h.c);
-      }
-      setStats(s);
       setLevelComplete(lc);
-      setHanziStatuses(hs);
-    }
-    load();
+    })();
   }, [refresh]);
 
-  function getVisibleChars(level) {
-    let list = hanziData.filter(h => h.l === level);
-    if (filter !== 'all') {
-      list = list.filter(h => hanziStatuses[h.c]?.status === filter);
+  // Load words when level is expanded, page changes, or search/filter changes
+  useEffect(() => {
+    if (expandedLevel === null) {
+      setHanziData([]);
+      return;
     }
-    if (search) {
-      const q = search.toLowerCase();
-      list = list.filter(h =>
-        h.p.toLowerCase().includes(q) ||
-        h.m.toLowerCase().includes(q)
-      );
-    }
-    return list;
+    let cancelled = false;
+    (async () => {
+      try {
+        const svc = await getVocabularyService();
+        if (search) {
+          const { words, total } = await svc.searchWords(search, PAGE_SIZE, page * PAGE_SIZE);
+          if (!cancelled) {
+            setHanziData(words);
+            setTotalCount(total);
+          }
+        } else {
+          const { words, total } = await svc.getWordsByLevel(expandedLevel, PAGE_SIZE, page * PAGE_SIZE);
+          if (!cancelled) {
+            setHanziData(words);
+            setTotalCount(total);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load words:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [expandedLevel, page, search]);
+
+  // Load statuses for the current page of words
+  useEffect(() => {
+    (async () => {
+      const hs = {};
+      for (const h of hanziData) {
+        hs[h.character] = await getHanziStatus(h.character);
+      }
+      setHanziStatuses(hs);
+    })();
+  }, [hanziData, refresh]);
+
+  function getVisibleChars() {
+    if (filter === 'all') return hanziData;
+    return hanziData.filter(h => hanziStatuses[h.character]?.status === filter);
   }
 
   const toggleLevel = (level) => {
     setExpandedLevel(expandedLevel === level ? null : level);
-    setFilter('all');
+    setPage(0);
     setSearch('');
+    setFilter('all');
   };
 
-  // Counts for summary
-  let totalAll = 0, learnedAll = 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+
+  // Summary counts
+  let learnedAll = 0;
   for (const h of hanziData) {
-    if (hanziStatuses[h.c]?.status === 'learned') learnedAll++;
-    totalAll++;
+    if (hanziStatuses[h.character]?.status === 'learned') learnedAll++;
   }
+
+  if (loading) {
+    return (
+      <ScrollView style={styles.words} contentContainerStyle={styles.wordsContent}>
+        <Text style={styles.title}>Words</Text>
+        <Text style={styles.summary}>Loading vocabulary...</Text>
+      </ScrollView>
+    );
+  }
+
+  const totalChars = Object.values(levelTotals).reduce((a, b) => a + b, 0);
 
   return (
     <ScrollView style={styles.words} contentContainerStyle={styles.wordsContent}>
       <Text style={styles.title}>Words</Text>
-      <Text style={styles.summary}>{learnedAll} / {totalAll} characters learned</Text>
+      <Text style={styles.summary}>{learnedAll} / {totalChars} characters learned (page {page + 1}/{totalPages})</Text>
 
       {expandedLevel !== null && (
         <View style={styles.toolbar}>
@@ -96,9 +158,8 @@ export default function Words() {
 
       <View style={styles.levels}>
         {LEVELS.map(level => {
-          const levelStats = stats[level] || { total: 0, learned: 0, pct: 0 };
+          const total = levelTotals[level] || 0;
           const completed = levelComplete[level] || false;
-          const chars = getVisibleChars(level);
           const isOpen = expandedLevel === level;
 
           return (
@@ -106,10 +167,10 @@ export default function Words() {
               <TouchableOpacity style={styles.levelHeader} onPress={() => toggleLevel(level)}>
                 <View style={styles.levelTitleRow}>
                   <Text style={styles.levelTitle}>HSK {level} <Text style={styles.expandIcon}>{isOpen ? '▼' : '▶'}</Text></Text>
-                  <Text style={styles.levelCount}>{levelStats.learned} / {levelStats.total}</Text>
+                  <Text style={styles.levelCount}>0 / {total}</Text>
                 </View>
                 <View style={styles.progressBar}>
-                  <View style={[styles.progressFill, { width: `${levelStats.pct}%` }]} />
+                  <View style={[styles.progressFill, { width: '0%' }]} />
                 </View>
               </TouchableOpacity>
 
@@ -117,7 +178,7 @@ export default function Words() {
                 <View style={styles.levelBody}>
                   <View style={styles.levelActions}>
                     <TouchableOpacity style={styles.btnSmall} onPress={async () => {
-                      for (const h of chars) await markHanziLearned(h.c);
+                      for (const h of hanziData) await markHanziLearned(h.character);
                       rerender();
                     }}>
                       <Text style={styles.btnSmallText}>Mark all visible as learned</Text>
@@ -131,20 +192,39 @@ export default function Words() {
                     </TouchableOpacity>
                   </View>
 
-                  {chars.length === 0 ? (
+                  {/* Pagination */}
+                  <View style={styles.pagination}>
+                    <TouchableOpacity
+                      style={[styles.pageBtn, page === 0 && styles.pageBtnDisabled]}
+                      onPress={() => setPage(Math.max(0, page - 1))}
+                      disabled={page === 0}
+                    >
+                      <Text style={styles.pageBtnText}>◀ Prev</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.pageInfo}>{page + 1} / {totalPages}</Text>
+                    <TouchableOpacity
+                      style={[styles.pageBtn, page >= totalPages - 1 && styles.pageBtnDisabled]}
+                      onPress={() => setPage(Math.min(totalPages - 1, page + 1))}
+                      disabled={page >= totalPages - 1}
+                    >
+                      <Text style={styles.pageBtnText}>Next ▶</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {hanziData.length === 0 ? (
                     <Text style={styles.empty}>No characters match this filter.</Text>
                   ) : (
                     <View style={styles.grid}>
-                      {chars.map(h => {
-                        const s = hanziStatuses[h.c] || { status: 'new' };
+                      {getVisibleChars().map(h => {
+                        const s = hanziStatuses[h.character] || { status: 'new' };
                         return (
                           <TouchableOpacity
-                            key={h.c}
+                            key={h.character}
                             style={[styles.charCard, s.status === 'learned' && styles.charCardLearned, s.status === 'learning' && styles.charCardLearning]}
                             onPress={() => setDetailChar(h)}
                           >
-                            <Text style={styles.charText}>{h.c}</Text>
-                            <Text style={styles.charPinyin}>{h.p}</Text>
+                            <Text style={styles.charText}>{h.character}</Text>
+                            <Text style={styles.charPinyin}>{h.pinyin}</Text>
                             <Text style={styles.charStatus}>
                               {s.status === 'learned' ? '✓' : s.status === 'learning' ? '○' : ''}
                             </Text>
@@ -169,17 +249,17 @@ export default function Words() {
             </TouchableOpacity>
             {detailChar && (
               <>
-                <Text style={styles.modalChar}>{detailChar.c}</Text>
-                <StrokePlayer char={detailChar.c} playing={true} width={160} height={160} />
-                <Text style={styles.pinyin}>{detailChar.p}</Text>
-                <Text style={styles.meaning}>{detailChar.m}</Text>
+                <Text style={styles.modalChar}>{detailChar.character}</Text>
+                <StrokePlayer char={detailChar.character} playing={true} width={160} height={160} />
+                <Text style={styles.pinyin}>{detailChar.pinyin}</Text>
+                <Text style={styles.meaning}>{detailChar.meaning}</Text>
                 <View style={styles.modalActions}>
-                  {(hanziStatuses[detailChar.c]?.status) === 'learned' ? (
-                    <TouchableOpacity style={styles.btnCorrect} onPress={async () => { await markHanziWrong(detailChar.c); rerender(); }}>
+                  {(hanziStatuses[detailChar.character]?.status) === 'learned' ? (
+                    <TouchableOpacity style={styles.btnCorrect} onPress={async () => { await markHanziWrong(detailChar.character); rerender(); }}>
                       <Text style={styles.btnCorrectText}>✓ Learned (tap to unlearn)</Text>
                     </TouchableOpacity>
                   ) : (
-                    <TouchableOpacity style={styles.btnPrimary} onPress={async () => { await markHanziLearned(detailChar.c); rerender(); }}>
+                    <TouchableOpacity style={styles.btnPrimary} onPress={async () => { await markHanziLearned(detailChar.character); rerender(); }}>
                       <Text style={styles.btnPrimaryText}>Mark learned</Text>
                     </TouchableOpacity>
                   )}
@@ -218,6 +298,11 @@ const styles = StyleSheet.create({
   progressFill: { height: '100%', backgroundColor: '#4a6fa5', borderRadius: 4 },
   levelBody: { marginTop: 8 },
   levelActions: { flexDirection: 'row', gap: 6, flexWrap: 'wrap', marginBottom: 10 },
+  pagination: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 12, marginBottom: 10 },
+  pageBtn: { paddingVertical: 6, paddingHorizontal: 14, backgroundColor: '#e8d5b7', borderRadius: 8 },
+  pageBtnDisabled: { opacity: 0.4 },
+  pageBtnText: { fontSize: 13, color: '#333' },
+  pageInfo: { fontSize: 13, color: '#777' },
   btnSmall: { paddingVertical: 6, paddingHorizontal: 12, backgroundColor: '#e8d5b7', borderRadius: 8 },
   btnSmallDisabled: { opacity: 0.5 },
   btnSmallText: { fontSize: 12, color: '#333' },

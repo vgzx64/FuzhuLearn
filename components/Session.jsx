@@ -1,6 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Modal, Platform } from 'react-native';
-import hanziData from '../data/hanzi-index.json';
 import StrokePlayer from './StrokePlayer';
 import DrawCanvas from './DrawCanvas';
 import UsageInfo from './UsageInfo';
@@ -9,6 +8,7 @@ import { load as loadHanziLookup, lookup as hanziLookup, setWebViewRef, handleMe
 import { getReferenceStrokes, checkStrokeOrder } from '../utils/strokeOrder';
 import { isDev } from '../utils/env';
 import DebugPanel from './DebugPanel';
+import { getVocabularyService } from '../services/vocabulary';
 
 // ponytail: single-file session controller.
 
@@ -26,8 +26,24 @@ export default function Session() {
   const [sessionQueue, setSessionQueue] = useState([]);
   const [lastStrokes, setLastStrokes] = useState(null);
   const [showLevelPicker, setShowLevelPicker] = useState(false);
+  const [hanziData, setHanziData] = useState([]);
   const canvasRef = useRef(null);
   const lookupWebViewRef = useRef(null);
+
+  // Load vocabulary data for the current level
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const svc = await getVocabularyService();
+        const { words } = await svc.getWordsByLevel(currentLevel, 1000, 0);
+        if (!cancelled) setHanziData(words);
+      } catch (err) {
+        if (!cancelled) setMessage('Failed to load vocabulary: ' + err.message);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [currentLevel]);
 
   // Load HanziLookup WASM on mount
   useEffect(() => {
@@ -48,6 +64,10 @@ export default function Session() {
   }, []);
 
   const startLearn = useCallback(async () => {
+    if (hanziData.length === 0) {
+      setMessage('Loading vocabulary...');
+      return;
+    }
     const { queue } = await getSessionCards(currentLevel, hanziData);
     if (queue.length === 0) {
       setMessage('All caught up! No new cards and no reviews due today.');
@@ -62,20 +82,24 @@ export default function Session() {
     setCurrentChar(char);
     setMessage('');
     setLookupResult(null);
-    const status = await getHanziStatus(char.c);
+    const status = await getHanziStatus(char.character);
     if (status.status === 'new') {
       setPhase('show');
     } else {
       setPhase('draw');
       setTimeout(() => canvasRef.current?.clear(), 50);
     }
-  }, [currentLevel, popFromQueue]);
+  }, [currentLevel, hanziData, popFromQueue]);
 
   const startReview = useCallback(async () => {
+    if (hanziData.length === 0) {
+      setMessage('Loading vocabulary...');
+      return;
+    }
     const { queue } = await getSessionCards(currentLevel, hanziData);
     const dueChars = [];
     for (const c of queue) {
-      const s = await getHanziStatus(c.c);
+      const s = await getHanziStatus(c.character);
       if (s.status !== 'new') dueChars.push(c);
     }
     if (dueChars.length === 0) {
@@ -89,7 +113,7 @@ export default function Session() {
     setMessage('');
     setLookupResult(null);
     setTimeout(() => canvasRef.current?.clear(), 50);
-  }, [currentLevel, popFromQueue]);
+  }, [currentLevel, hanziData, popFromQueue]);
 
   const handleShowDone = useCallback(() => {
     setPhase('draw');
@@ -109,10 +133,10 @@ export default function Session() {
     try {
       const [matches, refStrokes] = await Promise.all([
         hanziLookup(strokes, 8),
-        getReferenceStrokes(currentChar.c)
+        getReferenceStrokes(currentChar.character)
       ]);
 
-      const correctChar = currentChar.c;
+      const correctChar = currentChar.character;
       const correctIndex = matches.findIndex(m => m.hanzi === correctChar);
 
       let strokeCheck = null;
@@ -146,7 +170,7 @@ export default function Session() {
       setCurrentChar(char);
       setMessage('');
       setLookupResult(null);
-      const status = await getHanziStatus(char.c);
+      const status = await getHanziStatus(char.character);
       setPhase(status.status === 'new' ? 'show' : 'draw');
       if (status.status !== 'new') setTimeout(() => canvasRef.current?.clear(), 50);
       return;
@@ -157,14 +181,14 @@ export default function Session() {
 
   const handleForgot = useCallback(async () => {
     if (!currentChar) return;
-    await markHanziForgotten(currentChar.c);
+    await markHanziForgotten(currentChar.character);
     const { char, remaining } = popFromQueue(sessionQueue);
     if (char) {
       setSessionQueue(remaining);
       setCurrentChar(char);
       setMessage('');
       setLookupResult(null);
-      const status = await getHanziStatus(char.c);
+      const status = await getHanziStatus(char.character);
       setPhase(status.status === 'new' ? 'show' : 'draw');
       if (status.status !== 'new') setTimeout(() => canvasRef.current?.clear(), 50);
     } else {
@@ -196,17 +220,17 @@ export default function Session() {
   }, [mode]);
 
   useEffect(() => {
-    if (!currentChar) {
+    if (!currentChar && hanziData.length > 0) {
       if (mode === 'learn') startLearn();
       else startReview();
     }
-  }, [mode, currentLevel, currentChar, startLearn, startReview]);
+  }, [mode, currentLevel, currentChar, hanziData, startLearn, startReview]);
 
   const [isNewCard, setIsNewCard] = useState(false);
 
   useEffect(() => {
     if (currentChar) {
-      getHanziStatus(currentChar.c).then(s => setIsNewCard(s.status === 'new'));
+      getHanziStatus(currentChar.character).then(s => setIsNewCard(s.status === 'new'));
     } else {
       setIsNewCard(false);
     }
@@ -279,17 +303,17 @@ export default function Session() {
         <View style={styles.card}>
           <View style={styles.header}>
             <Text style={styles.modeLabel}>{mode === 'learn' ? '📖 Learning' : '✏️ Review'}</Text>
-            <Text style={styles.level}>HSK {currentChar.l}</Text>
+            <Text style={styles.level}>HSK {currentChar.level}</Text>
           </View>
 
           {phase === 'show' && (
             <View style={styles.showSection}>
-              <Text style={styles.charLarge}>{currentChar.c}</Text>
-              <StrokePlayer char={currentChar.c} playing={true} width={200} height={200} />
+              <Text style={styles.charLarge}>{currentChar.character}</Text>
+              <StrokePlayer char={currentChar.character} playing={true} width={200} height={200} />
               <View style={styles.info}>
-                <Text style={styles.pinyin}>{currentChar.p}</Text>
-                <Text style={styles.meaning}>{currentChar.m}</Text>
-                <UsageInfo char={currentChar.c} />
+                <Text style={styles.pinyin}>{currentChar.pinyin}</Text>
+                <Text style={styles.meaning}>{currentChar.meaning}</Text>
+                <UsageInfo char={currentChar.character} />
               </View>
               <TouchableOpacity onPress={handleShowDone} style={styles.btnPrimary}>
                 <Text style={styles.btnPrimaryText}>Now you try!</Text>
@@ -300,10 +324,10 @@ export default function Session() {
           {phase === 'draw' && (
             <View style={styles.drawSection}>
               <View style={styles.prompt}>
-                <Text style={styles.pinyin}>{currentChar.p}</Text>
-                <Text style={styles.meaning}>{currentChar.m}</Text>
+                <Text style={styles.pinyin}>{currentChar.pinyin}</Text>
+                <Text style={styles.meaning}>{currentChar.meaning}</Text>
               </View>
-              <DrawCanvas ref={setCanvasRef} hintChar={isNewCard ? currentChar.c : null} />
+              <DrawCanvas ref={setCanvasRef} hintChar={isNewCard ? currentChar.character : null} />
               <View style={styles.actions}>
                 <TouchableOpacity
                   onPress={handleCheck}
@@ -366,7 +390,7 @@ export default function Session() {
                   {lookupResult.matches.slice(0, 5).map((m, i) => (
                     <View
                       key={i}
-                      style={[styles.matchItem, m.hanzi === currentChar.c && styles.matchItemCorrect]}
+                      style={[styles.matchItem, m.hanzi === currentChar.character && styles.matchItemCorrect]}
                     >
                       <Text style={styles.matchChar}>{m.hanzi}</Text>
                       <Text style={styles.matchScore}>{Math.round(m.score * 100)}%</Text>

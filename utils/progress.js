@@ -150,9 +150,9 @@ function isDue(entry) {
 // Get new (never learned) hanzi for a level, up to a limit
 export async function getNewHanzi(level, hanziList, limit = DECK_CONFIG.newCardsPerDay) {
   const p = await getProgress();
-  const chars = hanziList.filter(h => h.l === level);
+  const chars = hanziList.filter(h => h.level === level);
   const newChars = chars.filter(h => {
-    const s = p.hanzi[h.c];
+    const s = p.hanzi[h.character];
     return !s || s.status === 'new';
   });
   // Return in random order, capped
@@ -163,15 +163,15 @@ export async function getNewHanzi(level, hanziList, limit = DECK_CONFIG.newCards
 // Get due (scheduled for review) hanzi for a level, up to a limit
 export async function getDueHanzi(level, hanziList, limit = DECK_CONFIG.maxReviewsPerDay) {
   const p = await getProgress();
-  const chars = hanziList.filter(h => h.l === level);
+  const chars = hanziList.filter(h => h.level === level);
   const due = chars.filter(h => {
-    const s = p.hanzi[h.c];
+    const s = p.hanzi[h.character];
     return s && s.status !== 'new' && isDue(s);
   });
   // Sort by interval (shorter intervals first = most urgent)
   due.sort((a, b) => {
-    const sa = ensureSM2(p.hanzi[a.c]);
-    const sb = ensureSM2(p.hanzi[b.c]);
+    const sa = ensureSM2(p.hanzi[a.character]);
+    const sb = ensureSM2(p.hanzi[b.character]);
     return (sa.interval || 0) - (sb.interval || 0);
   });
   return due.slice(0, limit);
@@ -217,11 +217,11 @@ export async function isLevelComplete(level) {
 
 export async function getLevelStats(level, hanziList) {
   const p = await getProgress();
-  const chars = hanziList.filter(h => h.l === level);
+  const chars = hanziList.filter(h => h.level === level);
   let total = chars.length;
   let learned = 0;
   for (const h of chars) {
-    const s = p.hanzi[h.c];
+    const s = p.hanzi[h.character];
     if (s?.status === 'learned') learned++;
   }
   return { total, learned, pct: total ? Math.round(learned / total * 100) : 0 };

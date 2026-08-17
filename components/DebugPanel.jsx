@@ -45,7 +45,7 @@ export default function DebugPanel({ currentChar, strokes, lookupResult, strokeC
             <Text style={s.row}>Correct index: {lookupResult.correctIndex}</Text>
             <Text style={s.label}>Matches:</Text>
             {lookupResult.matches.slice(0, 5).map((m, i) => (
-              <Text key={i} style={[s.row, m.hanzi === currentChar?.c ? { backgroundColor: '#f0faf0' } : null]}>
+              <Text key={i} style={[s.row, m.hanzi === currentChar?.character ? { backgroundColor: '#f0faf0' } : null]}>
                 {m.hanzi} — {Math.round(m.score * 100)}%
               </Text>
             ))}
