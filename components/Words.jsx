@@ -14,6 +14,7 @@ export default function Words() {
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [detailChar, setDetailChar] = useState(null);
+  const [detailIndex, setDetailIndex] = useState(0);
   const [hanziData, setHanziData] = useState([]);
   const [totalCount, setTotalCount] = useState(0);
   const [page, setPage] = useState(0);
@@ -126,6 +127,9 @@ export default function Words() {
   }
 
   const totalChars = Object.values(levelTotals).reduce((a, b) => a + b, 0);
+  const detailChars = detailChar ? Array.from(detailChar.character) : [];
+  const detailIndexClamped = detailChars.length > 0 ? Math.min(detailIndex, detailChars.length - 1) : 0;
+  const currentChar = detailChars[detailIndexClamped] || '';
 
   return (
     <ScrollView style={styles.words} contentContainerStyle={styles.wordsContent}>
@@ -221,7 +225,7 @@ export default function Words() {
                           <TouchableOpacity
                             key={h.character}
                             style={[styles.charCard, s.status === 'learned' && styles.charCardLearned, s.status === 'learning' && styles.charCardLearning]}
-                            onPress={() => setDetailChar(h)}
+                            onPress={() => { setDetailChar(h); setDetailIndex(0); }}
                           >
                             <Text style={styles.charText}>{h.character}</Text>
                             <Text style={styles.charPinyin}>{h.pinyin}</Text>
@@ -249,10 +253,35 @@ export default function Words() {
             </TouchableOpacity>
             {detailChar && (
               <>
-                <Text style={styles.modalChar}>{detailChar.character}</Text>
-                <StrokePlayer char={detailChar.character} playing={true} width={160} height={160} />
+                <Text style={[styles.modalChar, detailChars.length >= 3 && styles.modalCharSmall]}>
+                  {detailChars.map((c, i) => (
+                    <Text key={i} style={i === detailIndexClamped ? styles.modalCharActive : undefined}>
+                      {c}
+                    </Text>
+                  ))}
+                </Text>
+                <StrokePlayer char={currentChar} playing={true} width={160} height={160} />
                 <Text style={styles.pinyin}>{detailChar.pinyin}</Text>
                 <Text style={styles.meaning}>{detailChar.meaning}</Text>
+                {detailChars.length > 1 && (
+                  <View style={styles.charNav}>
+                    <TouchableOpacity
+                      style={[styles.charNavBtn, detailIndexClamped === 0 && styles.charNavBtnDisabled]}
+                      onPress={() => setDetailIndex(Math.max(0, detailIndexClamped - 1))}
+                      disabled={detailIndexClamped === 0}
+                    >
+                      <Text style={styles.charNavBtnText}>◀</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.charNavInfo}>{detailIndexClamped + 1} / {detailChars.length}</Text>
+                    <TouchableOpacity
+                      style={[styles.charNavBtn, detailIndexClamped >= detailChars.length - 1 && styles.charNavBtnDisabled]}
+                      onPress={() => setDetailIndex(Math.min(detailChars.length - 1, detailIndexClamped + 1))}
+                      disabled={detailIndexClamped >= detailChars.length - 1}
+                    >
+                      <Text style={styles.charNavBtnText}>▶</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
                 <View style={styles.modalActions}>
                   {(hanziStatuses[detailChar.character]?.status) === 'learned' ? (
                     <TouchableOpacity style={styles.btnCorrect} onPress={async () => { await markHanziWrong(detailChar.character); rerender(); }}>
@@ -319,6 +348,13 @@ const styles = StyleSheet.create({
   modalClose: { position: 'absolute', top: 8, right: 10, padding: 4 },
   modalCloseText: { fontSize: 19, color: '#777' },
   modalChar: { fontSize: 64, lineHeight: 76 },
+  modalCharSmall: { fontSize: 46, lineHeight: 58 },
+  modalCharActive: { color: '#4a6fa5', textDecorationLine: 'underline' },
+  charNav: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  charNavBtn: { paddingVertical: 6, paddingHorizontal: 14, backgroundColor: '#e8d5b7', borderRadius: 8 },
+  charNavBtnDisabled: { opacity: 0.4 },
+  charNavBtnText: { fontSize: 14, color: '#333' },
+  charNavInfo: { fontSize: 13, color: '#777', minWidth: 40, textAlign: 'center' },
   pinyin: { fontSize: 19, color: '#4a6fa5', fontStyle: 'italic', marginBottom: 4 },
   meaning: { fontSize: 15, color: '#777' },
   modalActions: { marginTop: 4 },
